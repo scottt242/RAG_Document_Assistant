@@ -74,6 +74,82 @@ const state: RuntimeState =
     activeConversationId: null,
   });
 
+const stateFile = process.env.VERCEL
+  ? path.join("/tmp", "state.json")
+  : path.join(process.cwd(), "uploads", "state.json");
+
+async function saveState() {
+  try {
+    const data = {
+      documents: state.documents,
+      conversations: state.conversations,
+      activeConversationId: state.activeConversationId,
+    };
+    await fs.mkdir(path.dirname(stateFile), { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify(data, null, 2), "utf-8");
+  } catch (error) {
+    console.error("Failed to save state:", error);
+  }
+}
+
+async function restoreVectorStore() {
+  try {
+    const uploadsDir = process.env.VERCEL
+      ? path.join("/tmp", "uploads")
+      : path.join(process.cwd(), "uploads");
+
+    for (const doc of state.documents) {
+      if (doc.status !== "ready") continue;
+      const storedPath = path.join(uploadsDir, doc.storedName);
+      
+      try {
+        await fs.access(storedPath);
+        const pages = await loadPDF(storedPath);
+        if (pages.length) {
+          const chunks = await splitDocuments(pages);
+          if (!state.vectorStore) {
+            state.vectorStore = await vectorStoreDocuments(chunks);
+          } else {
+            await state.vectorStore.addDocuments(chunks);
+          }
+        }
+      } catch (e) {
+        console.warn(`Could not restore file ${doc.storedName}:`, e);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to restore vector store:", error);
+  }
+}
+
+async function loadState() {
+  try {
+    const content = await fs.readFile(stateFile, "utf-8");
+    const data = JSON.parse(content);
+    state.documents = data.documents || [];
+    state.conversations = data.conversations || [];
+    state.activeConversationId = data.activeConversationId || null;
+    
+    if (!state.vectorStore && state.documents.length > 0) {
+      console.log("Restoring vector store from saved documents...");
+      void restoreVectorStore();
+    }
+  } catch (error) {
+    // If state file doesn't exist, that's fine
+  }
+}
+
+let isLoaded = false;
+const loadPromise = loadState().then(() => {
+  isLoaded = true;
+});
+
+async function ensureLoaded() {
+  if (!isLoaded) {
+    await loadPromise;
+  }
+}
+
 function now() {
   return new Date().toISOString();
 }
@@ -136,7 +212,8 @@ function normalizeSource(doc: DocumentInterface, index: number): SourceRecord {
   };
 }
 
-function getOrCreateConversation(id?: string) {
+async function getOrCreateConversation(id?: string) {
+  await ensureLoaded();
   if (id) {
     const existing = state.conversations.find((conversation) => conversation.id === id);
     if (existing) {
@@ -145,7 +222,7 @@ function getOrCreateConversation(id?: string) {
   }
 
   const conversation: ConversationRecord = {
-    id: randomUUID(),
+    id: id || randomUUID(),
     title: "New conversation",
     createdAt: now(),
     updatedAt: now(),
@@ -155,10 +232,12 @@ function getOrCreateConversation(id?: string) {
 
   state.conversations.unshift(conversation);
   state.activeConversationId = conversation.id;
+  await saveState();
   return conversation;
 }
 
-export function createConversation(title = "New conversation") {
+export async function createConversation(title = "New conversation") {
+  await ensureLoaded();
   const conversation: ConversationRecord = {
     id: randomUUID(),
     title,
@@ -170,10 +249,12 @@ export function createConversation(title = "New conversation") {
 
   state.conversations.unshift(conversation);
   state.activeConversationId = conversation.id;
+  await saveState();
   return conversation;
 }
 
-export function listConversations() {
+export async function listConversations() {
+  await ensureLoaded();
   return state.conversations.map((conversation) => ({
     id: conversation.id,
     title: conversation.title,
@@ -184,25 +265,43 @@ export function listConversations() {
   }));
 }
 
-export function listDocuments() {
+export async function listDocuments() {
+  await ensureLoaded();
   return state.documents;
 }
 
-export function getConversation(id: string) {
-  return state.conversations.find((conversation) => conversation.id === id) ?? null;
+export async function getConversation(id: string) {
+  await ensureLoaded();
+  let conversation = state.conversations.find((conversation) => conversation.id === id);
+  if (!conversation) {
+    conversation = {
+      id,
+      title: "New conversation",
+      createdAt: now(),
+      updatedAt: now(),
+      messages: [],
+      history: [],
+    };
+    state.conversations.push(conversation);
+    await saveState();
+  }
+  return conversation;
 }
 
-export function getActiveConversation() {
+export async function getActiveConversation() {
+  await ensureLoaded();
   const active = state.activeConversationId
-    ? getConversation(state.activeConversationId)
+    ? await getConversation(state.activeConversationId)
     : null;
 
-  return active ?? (state.conversations[0] ?? createConversation());
+  return active ?? (state.conversations[0] ?? await createConversation());
 }
 
-export function setActiveConversation(id: string) {
-  const conversation = getOrCreateConversation(id);
+export async function setActiveConversation(id: string) {
+  await ensureLoaded();
+  const conversation = await getOrCreateConversation(id);
   state.activeConversationId = conversation.id;
+  await saveState();
   return conversation;
 }
 
@@ -227,6 +326,7 @@ export async function ingestPdfUpload({
   file: File;
   onProgress?: ProgressHandler;
 }) {
+  await ensureLoaded();
   const document: StoredDocument = {
     id: randomUUID(),
     originalName: file.name,
@@ -240,6 +340,7 @@ export async function ingestPdfUpload({
   };
 
   state.documents.unshift(document);
+  await saveState();
 
   const progress = (stage: string, message: string, progressValue: number) => {
     onProgress?.({ type: "progress", stage, message, progress: progressValue });
@@ -250,6 +351,7 @@ export async function ingestPdfUpload({
     const { storedName, storedPath, size } = await saveUploadFile(file);
     document.storedName = storedName;
     document.size = size;
+    await saveState();
 
     progress("loading", "Extracting PDF pages", 35);
     const pages = await loadPDF(storedPath);
@@ -271,6 +373,7 @@ export async function ingestPdfUpload({
     document.chunks = chunks.length;
     document.status = "ready";
     document.updatedAt = now();
+    await saveState();
 
     progress("ready", "Document is ready to chat", 100);
 
@@ -279,6 +382,7 @@ export async function ingestPdfUpload({
     document.status = "error";
     document.error = error instanceof Error ? error.message : String(error);
     document.updatedAt = now();
+    await saveState();
     throw error;
   }
 }
@@ -290,7 +394,8 @@ export async function runConversationChat({
   conversationId?: string;
   question: string;
 }) {
-  const conversation = getOrCreateConversation(conversationId);
+  await ensureLoaded();
+  const conversation = await getOrCreateConversation(conversationId);
 
   if (!state.vectorStore) {
     throw new Error("Upload a PDF before starting a conversation.");
@@ -304,6 +409,7 @@ export async function runConversationChat({
   };
   conversation.messages.push(userMessage);
   conversation.history.push(new HumanMessage(question));
+  await saveState();
 
   const result = await chat(question, conversation.history, state.vectorStore);
   const answer = contentToString(result.answer);
@@ -323,6 +429,7 @@ export async function runConversationChat({
   }
 
   state.activeConversationId = conversation.id;
+  await saveState();
 
   return {
     conversation,
@@ -331,9 +438,10 @@ export async function runConversationChat({
   };
 }
 
-export function ensureInitialConversation() {
+export async function ensureInitialConversation() {
+  await ensureLoaded();
   if (!state.conversations.length) {
-    createConversation();
+    await createConversation();
   }
 
   return getActiveConversation();

@@ -3,18 +3,18 @@ import { createConversation, ensureInitialConversation, listConversations } from
 export const runtime = "nodejs";
 
 export async function GET() {
-  const active = ensureInitialConversation();
+  const active = await ensureInitialConversation();
 
   return Response.json({
     activeConversationId: active.id,
-    conversations: listConversations(),
+    conversations: await listConversations(),
   });
 }
 
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as { title?: string };
-    const conversation = createConversation(body.title?.trim() || "New conversation");
+    const conversation = await createConversation(body.title?.trim() || "New conversation");
 
     return Response.json({
       activeConversationId: conversation.id,
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
         updatedAt: conversation.updatedAt,
         messages: conversation.messages,
       },
-      conversations: listConversations(),
+      conversations: await listConversations(),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

@@ -4,6 +4,6 @@ export const runtime = "nodejs";
 
 export async function GET() {
   return Response.json({
-    documents: listDocuments(),
+    documents: await listDocuments(),
   });
 }
