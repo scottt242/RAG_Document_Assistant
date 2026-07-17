@@ -1,4 +1,6 @@
-import { PDFLoader } from "@langchain/community/document_loaders/fs/pdf";
+import fs from "fs/promises";
+import { PDFParse } from "pdf-parse";
+import { Document } from "@langchain/core/documents";
 import { MemoryVectorStore } from "@langchain/classic/vectorstores/memory";
 import { BaseMessage } from "@langchain/core/messages";
 import type { DocumentInterface } from "@langchain/core/documents";
@@ -26,11 +28,32 @@ function createChatModel() {
   });
 }
 
-export async function loadPDF(path: string) {
-  const loader = new PDFLoader(path);
-  const docs = await loader.load();
+export async function loadPDF(pdfPath: string) {
+  const buffer = await fs.readFile(pdfPath);
+  const uint8 = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  const parser = new PDFParse(uint8);
+  const result = await parser.getText();
 
-  console.log(`Loaded ${docs.length} documents from ${path}`);
+  // Create one document per page using the pages array from pdf-parse v2
+  const docs: Document[] = [];
+
+  for (const page of result.pages) {
+    const pageContent = page.text.trim();
+    if (!pageContent) continue;
+
+    docs.push(
+      new Document({
+        pageContent,
+        metadata: {
+          source: pdfPath,
+          loc: { pageNumber: page.num },
+        },
+      })
+    );
+  }
+
+  await parser.destroy();
+  console.log(`Loaded ${docs.length} documents from ${pdfPath}`);
   return docs;
 }
 
@@ -92,7 +115,7 @@ export async function chat(
   const context = docs.map((doc) => doc.pageContent).join("\n\n");
 
   const promptStr = `You are a helpful assistant that answers questions based on the provided context.
-If the answer is not contained within the context, respond with "I don't know.".
+If the answer is not contained within the context, respond with "out of the context" and provide a brief explanation.
 
 Context:
 ${context}
