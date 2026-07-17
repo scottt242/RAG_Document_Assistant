@@ -207,7 +207,9 @@ export function setActiveConversation(id: string) {
 }
 
 export async function saveUploadFile(file: File) {
-  const uploadsDir = path.join(process.cwd(), "uploads");
+  const uploadsDir = process.env.VERCEL
+    ? path.join("/tmp", "uploads")
+    : path.join(process.cwd(), "uploads");
   await fs.mkdir(uploadsDir, { recursive: true });
 
   const storedName = `${Date.now()}-${file.name ?? "upload.pdf"}`;
