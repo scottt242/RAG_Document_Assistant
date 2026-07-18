@@ -25,7 +25,7 @@ function getGoogleApiKey() {
 function createChatModel() {
   return new ChatGoogleGenerativeAI({
     apiKey: getGoogleApiKey(),
-    model: "gemini-2.5-flash",
+    model: "gemini-3.5-flash",
   });
 }
 
