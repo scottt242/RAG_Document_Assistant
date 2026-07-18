@@ -115,8 +115,8 @@ export async function chat(
   const docs = await retrieveDocs(standaloneQuestion, vectorStore, 3);
   const context = docs.map((doc) => doc.pageContent).join("\n\n");
 
-  const promptStr = `You are a helpful assistant that answers questions based on the provided context.
-If the answer is not contained within the context, respond with "out of the context" and provide a brief explanation.
+  const promptStr = `You are a helpful assistant that answers questions based on the provided context. 
+  If the answer is not contained within the context, respond with "I don't know".
 
 Context:
 ${context}
